@@ -7,15 +7,14 @@ on:
       - 'data/**.dvc'
       - 'src/**.py'
       - 'params.yaml'
+      - 'requirements.txt'
+      - '.github/workflows/mlops.yml'
   workflow_dispatch:
 
 jobs:
 
   # ---------------------------------------------------------------------------
   # JOB 1 - UNIT TEST
-  # Chay unit tests tren du lieu ao (khong can ket noi cloud storage).
-  # Neu co bat ky test nao that bai, pipeline dung lai o day va khong tien hanh
-  # huan luyen hay trien khai.
   # ---------------------------------------------------------------------------
   test:
     name: Unit Test
@@ -25,7 +24,7 @@ jobs:
 
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.10"
+          python-version: "3.12"
 
       - name: Install dependencies
         run: pip install -r requirements.txt
@@ -36,8 +35,6 @@ jobs:
 
   # ---------------------------------------------------------------------------
   # JOB 2 - TRAIN
-  # Xac thuc cloud storage, pull du lieu bang DVC, huan luyen mo hinh, upload artifact.
-  # Chi chay khi Job 1 (Unit Test) hoan thanh thanh cong.
   # ---------------------------------------------------------------------------
   train:
     name: Train
@@ -51,7 +48,7 @@ jobs:
 
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.10"
+          python-version: "3.12"
 
       - name: Install dependencies
         run: pip install -r requirements.txt
@@ -59,21 +56,18 @@ jobs:
       - name: Configure AWS credentials
         run: |
           mkdir -p ~/.aws
-          cat > ~/.aws/credentials << EOF
-          [default]
-          aws_access_key_id = ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws_secret_access_key = ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          EOF
-          cat > ~/.aws/config << EOF
-          [default]
-          region = us-east-1
-          EOF
-          echo "AWS_DEFAULT_REGION=us-east-1" >> $GITHUB_ENV
-          echo "AWS_ACCESS_KEY_ID=${{ secrets.AWS_ACCESS_KEY_ID }}" >> $GITHUB_ENV
-          echo "AWS_SECRET_ACCESS_KEY=${{ secrets.AWS_SECRET_ACCESS_KEY }}" >> $GITHUB_ENV
+          echo "[default]" > ~/.aws/credentials
+          echo "aws_access_key_id = ${{ secrets.AWS_ACCESS_KEY_ID }}" >> ~/.aws/credentials
+          echo "aws_secret_access_key = ${{ secrets.AWS_SECRET_ACCESS_KEY }}" >> ~/.aws/credentials
+          echo "[default]" > ~/.aws/config
+          echo "region = us-east-1" >> ~/.aws/config
 
       - name: Pull data with DVC
-        run: dvc pull --verbose
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: us-east-1
+        run: dvc pull
 
       - name: Train model
         run: python src/train.py
@@ -85,16 +79,19 @@ jobs:
           echo "accuracy=$ACC" >> $GITHUB_OUTPUT
 
       - name: Upload model to Cloud Storage
-        run: |
-          python - <<'EOF'
-          import boto3, os
-          BUCKET = os.environ["CLOUD_BUCKET"]
-          s3 = boto3.client("s3", region_name="us-east-1")
-          s3.upload_file("models/model.pkl", BUCKET, "models/latest/model.pkl")
-          print(f"Model da duoc upload len s3://{BUCKET}/models/latest/model.pkl")
-          EOF
         env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: us-east-1
           CLOUD_BUCKET: ${{ secrets.CLOUD_BUCKET }}
+        run: |
+          python -c "
+          import boto3, os
+          BUCKET = os.environ['CLOUD_BUCKET']
+          s3 = boto3.client('s3', region_name='us-east-1')
+          s3.upload_file('models/model.pkl', BUCKET, 'models/latest/model.pkl')
+          print(f'Model uploaded to s3://{BUCKET}/models/latest/model.pkl')
+          "
 
       - name: Save metrics as artifact
         uses: actions/upload-artifact@v4
@@ -105,9 +102,6 @@ jobs:
 
   # ---------------------------------------------------------------------------
   # JOB 3 - EVAL
-  # Kiem tra nguong chat luong (accuracy >= 0.70).
-  # Pipeline dung lai o day neu mo hinh chua dat yeu cau.
-  # Chi chay khi Job 2 (Train) hoan thanh thanh cong.
   # ---------------------------------------------------------------------------
   eval:
     name: Eval
@@ -117,19 +111,17 @@ jobs:
 
       - name: Check eval gate
         run: |
-          python - <<'EOF'
-          acc = float("${{ needs.train.outputs.accuracy }}")
-          EVAL_THRESHOLD = 0.68
-          if acc < EVAL_THRESHOLD:
-              raise SystemExit(f"FAILED: accuracy {acc:.4f} < {EVAL_THRESHOLD}. Huy deploy.")
-          print(f"PASSED: accuracy {acc:.4f} >= {EVAL_THRESHOLD}. Dang trien khai model.")
-          EOF
+          python -c "
+          acc = float('${{ needs.train.outputs.accuracy }}')
+          threshold = 0.68
+          if acc < threshold:
+              raise SystemExit(f'FAILED: accuracy {acc:.4f} < {threshold}. Huy deploy.')
+          print(f'PASSED: accuracy {acc:.4f} >= {threshold}. Dang trien khai.')
+          "
 
 
   # ---------------------------------------------------------------------------
   # JOB 4 - DEPLOY
-  # Trien khai len VM qua SSH.
-  # Chi chay khi Job 3 (Eval) hoan thanh thanh cong.
   # ---------------------------------------------------------------------------
   deploy:
     name: Deploy
