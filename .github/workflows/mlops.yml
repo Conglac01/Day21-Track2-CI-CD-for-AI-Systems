@@ -11,11 +11,17 @@ on:
       - '.github/workflows/mlops.yml'
   workflow_dispatch:
 
+env:
+  AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+  AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+  AWS_DEFAULT_REGION: us-east-1
+  AWS_EC2_METADATA_DISABLED: true
+
 jobs:
 
-  # ---------------------------------------------------------------------------
+  # =========================================================================
   # JOB 1 - UNIT TEST
-  # ---------------------------------------------------------------------------
+  # =========================================================================
   test:
     name: Unit Test
     runs-on: ubuntu-latest
@@ -27,15 +33,17 @@ jobs:
           python-version: "3.12"
 
       - name: Install dependencies
-        run: pip install -r requirements.txt
+        run: |
+          python -m pip install --upgrade pip
+          pip install pytest scikit-learn pandas mlflow joblib pyyaml
 
       - name: Run unit tests
         run: pytest tests/ -v
 
 
-  # ---------------------------------------------------------------------------
+  # =========================================================================
   # JOB 2 - TRAIN
-  # ---------------------------------------------------------------------------
+  # =========================================================================
   train:
     name: Train
     needs: test
@@ -51,23 +59,21 @@ jobs:
           python-version: "3.12"
 
       - name: Install dependencies
-        run: pip install -r requirements.txt
-
-      - name: Configure AWS credentials
         run: |
-          mkdir -p ~/.aws
-          echo "[default]" > ~/.aws/credentials
-          echo "aws_access_key_id = ${{ secrets.AWS_ACCESS_KEY_ID }}" >> ~/.aws/credentials
-          echo "aws_secret_access_key = ${{ secrets.AWS_SECRET_ACCESS_KEY }}" >> ~/.aws/credentials
-          echo "[default]" > ~/.aws/config
-          echo "region = us-east-1" >> ~/.aws/config
+          python -m pip install --upgrade pip
+          pip install mlflow scikit-learn pandas joblib pyyaml boto3
 
-      - name: Pull data with DVC
-        env:
-          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          AWS_DEFAULT_REGION: us-east-1
-        run: dvc pull
+      - name: Download data from S3
+        run: |
+          python -c "
+          import boto3, os
+          s3 = boto3.client('s3', region_name='us-east-1')
+          bucket = '${{ secrets.CLOUD_BUCKET }}'
+          os.makedirs('data', exist_ok=True)
+          s3.download_file(bucket, 'data/train_phase1.csv', 'data/train_phase1.csv')
+          s3.download_file(bucket, 'data/eval.csv', 'data/eval.csv')
+          print('Data downloaded from S3')
+          "
 
       - name: Train model
         run: python src/train.py
@@ -77,59 +83,53 @@ jobs:
         run: |
           ACC=$(python -c "import json; d=json.load(open('outputs/metrics.json')); print(d['accuracy'])")
           echo "accuracy=$ACC" >> $GITHUB_OUTPUT
+          echo "Accuracy: $ACC"
 
-      - name: Upload model to Cloud Storage
-        env:
-          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          AWS_DEFAULT_REGION: us-east-1
-          CLOUD_BUCKET: ${{ secrets.CLOUD_BUCKET }}
+      - name: Upload model to S3
         run: |
           python -c "
           import boto3, os
-          BUCKET = os.environ['CLOUD_BUCKET']
           s3 = boto3.client('s3', region_name='us-east-1')
-          s3.upload_file('models/model.pkl', BUCKET, 'models/latest/model.pkl')
-          print(f'Model uploaded to s3://{BUCKET}/models/latest/model.pkl')
+          bucket = '${{ secrets.CLOUD_BUCKET }}'
+          s3.upload_file('models/model.pkl', bucket, 'models/latest/model.pkl')
+          print('Model uploaded to S3')
           "
 
-      - name: Save metrics as artifact
+      - name: Save metrics artifact
         uses: actions/upload-artifact@v4
         with:
           name: metrics
           path: outputs/metrics.json
 
 
-  # ---------------------------------------------------------------------------
+  # =========================================================================
   # JOB 3 - EVAL
-  # ---------------------------------------------------------------------------
+  # =========================================================================
   eval:
     name: Eval
     needs: train
     runs-on: ubuntu-latest
     steps:
-
       - name: Check eval gate
         run: |
-          python -c "
+          python3 -c "
           acc = float('${{ needs.train.outputs.accuracy }}')
           threshold = 0.68
           if acc < threshold:
-              raise SystemExit(f'FAILED: accuracy {acc:.4f} < {threshold}. Huy deploy.')
-          print(f'PASSED: accuracy {acc:.4f} >= {threshold}. Dang trien khai.')
+            raise SystemExit(f'FAILED: accuracy {acc:.4f} < {threshold}. Cancel deploy.')
+          print(f'PASSED: accuracy {acc:.4f} >= {threshold}. Proceeding to deploy.')
           "
 
 
-  # ---------------------------------------------------------------------------
+  # =========================================================================
   # JOB 4 - DEPLOY
-  # ---------------------------------------------------------------------------
+  # =========================================================================
   deploy:
     name: Deploy
     needs: eval
     runs-on: ubuntu-latest
     steps:
-
-      - name: SSH deploy to VM
+      - name: SSH deploy and health check
         uses: appleboy/ssh-action@v1.0.3
         with:
           host: ${{ secrets.VM_HOST }}
@@ -139,9 +139,9 @@ jobs:
             sudo systemctl restart mlops-serve
             sleep 5
             for i in 1 2 3 4 5; do
-              echo "Health check attempt $i..."
-              curl -sf http://localhost:8000/health && echo "Health check passed." && exit 0
+              echo "Health check $i/5..."
+              curl -sf http://localhost:8000/health && echo "OK" && exit 0
               sleep 3
             done
-            echo "Health check failed after 5 attempts."
+            echo "Health check failed"
             exit 1
