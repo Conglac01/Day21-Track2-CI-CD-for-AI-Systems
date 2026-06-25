@@ -73,7 +73,7 @@ jobs:
 
           s3 = boto3.client('s3', region_name='us-east-1')
           dvc_config = open('.dvc/config').read()
-          remote_url = re.search(r'url\\s*=\\s*s3://([^/]+)/(.+)', dvc_config).groups()
+          remote_url = re.search(r'url\s*=\s*s3://([^/]+)/(.+)', dvc_config).groups()
           bucket, prefix = remote_url[0], remote_url[1].rstrip('/')
           remote_prefix = f'{prefix}/files/md5'
 
@@ -105,7 +105,7 @@ jobs:
           import boto3, os, re
           s3 = boto3.client('s3', region_name='us-east-1')
           dvc_config = open('.dvc/config').read()
-          bucket = re.search(r'url\\s*=\\s*s3://([^/]+)/', dvc_config).group(1)
+          bucket = re.search(r'url\s*=\s*s3://([^/]+)/', dvc_config).group(1)
           s3.upload_file('models/model.pkl', bucket, 'models/latest/model.pkl')
           print('Model uploaded to S3')
           PY
