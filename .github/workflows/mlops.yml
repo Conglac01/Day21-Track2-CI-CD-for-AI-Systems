@@ -61,19 +61,11 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install mlflow scikit-learn pandas joblib pyyaml boto3
+          pip install mlflow scikit-learn pandas joblib pyyaml boto3 "dvc[s3]"
 
-      - name: Download data from S3
+      - name: Pull data with DVC
         run: |
-          python -c "
-          import boto3, os
-          s3 = boto3.client('s3', region_name='us-east-1')
-          bucket = '${{ secrets.CLOUD_BUCKET }}'
-          os.makedirs('data', exist_ok=True)
-          s3.download_file(bucket, 'data/train_phase1.csv', 'data/train_phase1.csv')
-          s3.download_file(bucket, 'data/eval.csv', 'data/eval.csv')
-          print('Data downloaded from S3')
-          "
+          dvc pull data/train_phase1.csv.dvc data/eval.csv.dvc
 
       - name: Train model
         run: python src/train.py
@@ -114,7 +106,7 @@ jobs:
         run: |
           python3 -c "
           acc = float('${{ needs.train.outputs.accuracy }}')
-          threshold = 0.68
+          threshold = 0.70
           if acc < threshold:
             raise SystemExit(f'FAILED: accuracy {acc:.4f} < {threshold}. Cancel deploy.')
           print(f'PASSED: accuracy {acc:.4f} >= {threshold}. Proceeding to deploy.')
