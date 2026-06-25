@@ -1,10 +1,9 @@
-import mlflow
-import mlflow.sklearn
 import pandas as pd
 import yaml
 import json
 import joblib
 import os
+from contextlib import nullcontext
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import accuracy_score, f1_score
 
@@ -38,10 +37,18 @@ def train(
     X_eval = df_eval.drop(columns=["target"])
     y_eval = df_eval["target"]
 
-    with mlflow.start_run():
+    try:
+        import mlflow
+        import mlflow.sklearn
+    except ImportError:
+        mlflow = None
+
+    run_context = mlflow.start_run() if mlflow else nullcontext()
+    with run_context:
 
         # TODO 3: Ghi nhan cac sieu tham so
-        mlflow.log_params(params)
+        if mlflow:
+            mlflow.log_params(params)
 
         # TODO 4: Khoi tao va huan luyen RandomForestClassifier
         # Goi y: su dung random_state=42 de dam bao tinh tai tao
@@ -54,9 +61,10 @@ def train(
         f1 = f1_score(y_eval, preds, average="weighted")
 
         # TODO 6: Ghi nhan chi so vao MLflow
-        mlflow.log_metric("accuracy", acc)
-        mlflow.log_metric("f1_score", f1)
-        mlflow.sklearn.log_model(model, "model")
+        if mlflow:
+            mlflow.log_metric("accuracy", acc)
+            mlflow.log_metric("f1_score", f1)
+            mlflow.sklearn.log_model(model, "model")
 
         # TODO 7: In ket qua ra man hinh
         print(f"Accuracy: {acc:.4f} | F1: {f1:.4f}")
