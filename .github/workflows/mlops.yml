@@ -67,12 +67,15 @@ jobs:
         run: |
           python -c "
           import os
+          import re
           import yaml
           import boto3
 
           s3 = boto3.client('s3', region_name='us-east-1')
-          bucket = '${{ secrets.CLOUD_BUCKET }}'
-          remote_prefix = 'dvc/files/md5'
+          dvc_config = open('.dvc/config').read()
+          remote_url = re.search(r'url\\s*=\\s*s3://([^/]+)/(.+)', dvc_config).groups()
+          bucket, prefix = remote_url[0], remote_url[1].rstrip('/')
+          remote_prefix = f'{prefix}/files/md5'
 
           for dvc_file in ['data/train_phase1.csv.dvc', 'data/eval.csv.dvc']:
               with open(dvc_file) as f:
@@ -99,9 +102,10 @@ jobs:
       - name: Upload model to S3
         run: |
           python -c "
-          import boto3, os
+          import boto3, os, re
           s3 = boto3.client('s3', region_name='us-east-1')
-          bucket = '${{ secrets.CLOUD_BUCKET }}'
+          dvc_config = open('.dvc/config').read()
+          bucket = re.search(r'url\\s*=\\s*s3://([^/]+)/', dvc_config).group(1)
           s3.upload_file('models/model.pkl', bucket, 'models/latest/model.pkl')
           print('Model uploaded to S3')
           "
