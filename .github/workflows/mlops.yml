@@ -65,7 +65,7 @@ jobs:
 
       - name: Pull DVC data from S3
         run: |
-          python -c "
+          python <<'PY'
           import os
           import re
           import yaml
@@ -87,7 +87,7 @@ jobs:
               os.makedirs(os.path.dirname(local_path), exist_ok=True)
               s3.download_file(bucket, key, local_path)
               print(f'Downloaded {key} -> {local_path}')
-          "
+          PY
 
       - name: Train model
         run: python src/train.py
@@ -101,14 +101,14 @@ jobs:
 
       - name: Upload model to S3
         run: |
-          python -c "
+          python <<'PY'
           import boto3, os, re
           s3 = boto3.client('s3', region_name='us-east-1')
           dvc_config = open('.dvc/config').read()
           bucket = re.search(r'url\\s*=\\s*s3://([^/]+)/', dvc_config).group(1)
           s3.upload_file('models/model.pkl', bucket, 'models/latest/model.pkl')
           print('Model uploaded to S3')
-          "
+          PY
 
       - name: Save metrics artifact
         uses: actions/upload-artifact@v4
@@ -127,13 +127,13 @@ jobs:
     steps:
       - name: Check eval gate
         run: |
-          python3 -c "
+          python3 <<'PY'
           acc = float('${{ needs.train.outputs.accuracy }}')
           threshold = 0.70
           if acc < threshold:
             raise SystemExit(f'FAILED: accuracy {acc:.4f} < {threshold}. Cancel deploy.')
           print(f'PASSED: accuracy {acc:.4f} >= {threshold}. Proceeding to deploy.')
-          "
+          PY
 
 
   # =========================================================================
